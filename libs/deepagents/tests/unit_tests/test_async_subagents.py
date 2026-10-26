@@ -23,6 +23,7 @@ from langgraph.types import Command, interrupt
 from langgraph_sdk.client import LangGraphClient, SyncLangGraphClient
 from langsmith import tracing_context
 from langsmith.run_trees import RunTree
+from pydantic import BaseModel
 
 from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend, FilesystemBackend
@@ -33,6 +34,7 @@ from deepagents.middleware.async_subagents import (
     AsyncSubAgentState,
     AsyncTask,
     _build_async_subagent_tools,
+    _check_event,
     _notification_message,
     _resolve_headers,
     _tasks_reducer,
@@ -725,6 +727,81 @@ class TestCheckTool:
         assert text["text"] == "Here's the look."
         assert (image["type"], image["base64"]) == ("image", "aGVsbG8=")
         assert "secret plan" not in json.dumps([status, text])
+
+    @pytest.mark.parametrize("structured", [{"account": "AC-1"}, ["AC-1"], {}, [], False, 0, ""])
+    def test_check_prefers_structured_response(self, structured) -> None:
+        client = self._answered({"role": "assistant", "content": "Middleware appended this message."})
+        client.threads.get.return_value["values"]["structured_response"] = structured
+
+        update = self._check(client).update
+        assert update is not None
+        parsed = json.loads(update["messages"][0].content)
+
+        assert json.loads(parsed["result"]) == structured
+
+    def test_check_structured_response_without_messages(self) -> None:
+        client = self._answered({"role": "assistant", "content": "unused"})
+        client.threads.get.return_value = {"values": {"structured_response": {"account": "AC-1"}}}
+
+        update = self._check(client).update
+        assert update is not None
+        parsed = json.loads(update["messages"][0].content)
+
+        assert json.loads(parsed["result"]) == {"account": "AC-1"}
+
+    def test_check_none_structured_response_keeps_last_message(self) -> None:
+        client = self._answered({"role": "assistant", "content": "Plain answer"})
+        client.threads.get.return_value["values"]["structured_response"] = None
+
+        update = self._check(client).update
+        assert update is not None
+        parsed = json.loads(update["messages"][0].content)
+
+        assert parsed["result"] == "Plain answer"
+
+    def test_check_pydantic_structured_response(self) -> None:
+        class Account(BaseModel):
+            account: str
+
+        client = self._answered({"role": "assistant", "content": "Note"})
+        client.threads.get.return_value["values"]["structured_response"] = Account(account="AC-1")
+
+        update = self._check(client).update
+        assert update is not None
+        parsed = json.loads(update["messages"][0].content)
+
+        assert json.loads(parsed["result"]) == {"account": "AC-1"}
+
+    def test_check_dataclass_structured_response(self) -> None:
+        @dataclass
+        class Account:
+            account: str
+
+        client = self._answered({"role": "assistant", "content": "Note"})
+        client.threads.get.return_value["values"]["structured_response"] = Account(account="AC-1")
+
+        update = self._check(client).update
+        assert update is not None
+        parsed = json.loads(update["messages"][0].content)
+
+        assert json.loads(parsed["result"]) == {"account": "AC-1"}
+
+    def test_check_notification_preserves_structured_response(self) -> None:
+        runtime = self._make_check_runtime()
+        task = runtime.state["async_tasks"]["thread_abc"]
+        client = self._answered({"role": "assistant", "content": "Note"})
+        client.threads.get.return_value["values"]["structured_response"] = {"account": "AC-1"}
+        event = _check_event(
+            task,
+            client.runs.get.return_value,
+            client.threads.get.return_value,
+            "success",
+        )
+
+        assert event is not None
+        block = event["result"][0]
+        assert block["type"] == "text"
+        assert json.loads(block["text"]) == {"account": "AC-1"}
 
     def test_check_result_keeps_each_image_by_its_text(self) -> None:
         answer = [

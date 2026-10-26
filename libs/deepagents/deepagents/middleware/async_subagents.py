@@ -608,7 +608,16 @@ def _task_event(config: RunnableConfig, agent_name: str, status: Literal["succes
 
 
 def _final_content(values: Mapping[str, Any]) -> list[ContentBlock]:
-    """The subagent's last message as standard content blocks, the task's result; it may hold images."""
+    """The structured answer, or last message, as standard content blocks."""
+    structured = values.get("structured_response")
+    if structured is not None:
+        if isinstance(structured, BaseModel):
+            content = structured.model_dump_json()
+        elif dataclasses.is_dataclass(structured) and not isinstance(structured, type):
+            content = json.dumps(dataclasses.asdict(structured))
+        else:
+            content = json.dumps(structured)
+        return [{"type": "text", "text": content}]
     messages = values.get("messages") or []
     if not messages:
         return [{"type": "text", "text": "(completed with no output messages)"}]
