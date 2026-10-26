@@ -34,6 +34,13 @@ from deepagents.backends.state import StateBackend
 _DELETE_UNSUPPORTED_ERROR = "Error: deletion is not supported for '{file_path}'."
 
 
+def _restore_error_path(error: str | None, stripped_path: str, original_path: str) -> str | None:
+    """Restore only the exact quoted routed path in a backend error."""
+    if error is None or stripped_path == original_path:
+        return error
+    return error.replace(f"'{stripped_path}'", f"'{original_path}'")
+
+
 def _remap_grep_path(m: GrepMatch, route_prefix: str) -> GrepMatch:
     """Create a new `GrepMatch` with the route prefix prepended to the path."""
     return cast(
@@ -323,6 +330,7 @@ class CompositeBackend(BackendProtocol):
         )
         if route_prefix is not None:
             ls_result = self._coerce_ls_result(backend.ls(backend_path))
+            ls_result.error = _restore_error_path(ls_result.error, backend_path, path)
             if ls_result.error:
                 return ls_result
             return LsResult(entries=[_remap_file_info_path(fi, route_prefix) for fi in (ls_result.entries or [])])
@@ -360,6 +368,7 @@ class CompositeBackend(BackendProtocol):
         )
         if route_prefix is not None:
             ls_result = self._coerce_ls_result(await backend.als(backend_path))
+            ls_result.error = _restore_error_path(ls_result.error, backend_path, path)
             if ls_result.error:
                 return ls_result
             return LsResult(entries=[_remap_file_info_path(fi, route_prefix) for fi in (ls_result.entries or [])])
@@ -405,7 +414,9 @@ class CompositeBackend(BackendProtocol):
             `ReadResult`
         """
         backend, stripped_key = self._get_backend_and_key(file_path)
-        return backend.read(stripped_key, offset=offset, limit=limit)
+        res = backend.read(stripped_key, offset=offset, limit=limit)
+        res.error = _restore_error_path(res.error, stripped_key, file_path)
+        return res
 
     async def aread(
         self,
@@ -415,7 +426,9 @@ class CompositeBackend(BackendProtocol):
     ) -> ReadResult:
         """Async version of read."""
         backend, stripped_key = self._get_backend_and_key(file_path)
-        return await backend.aread(stripped_key, offset=offset, limit=limit)
+        res = await backend.aread(stripped_key, offset=offset, limit=limit)
+        res.error = _restore_error_path(res.error, stripped_key, file_path)
+        return res
 
     @staticmethod
     def _coerce_grep_result(raw: GrepResult | list[GrepMatch] | str) -> GrepResult:
@@ -721,6 +734,7 @@ class CompositeBackend(BackendProtocol):
         """
         backend, stripped_key = self._get_backend_and_key(file_path)
         res = backend.write(stripped_key, content)
+        res.error = _restore_error_path(res.error, stripped_key, file_path)
         if res.path is not None and stripped_key != file_path:
             res.path = file_path
         return res
@@ -733,6 +747,7 @@ class CompositeBackend(BackendProtocol):
         """Async version of write."""
         backend, stripped_key = self._get_backend_and_key(file_path)
         res = await backend.awrite(stripped_key, content)
+        res.error = _restore_error_path(res.error, stripped_key, file_path)
         if res.path is not None and stripped_key != file_path:
             res.path = file_path
         return res
@@ -757,6 +772,7 @@ class CompositeBackend(BackendProtocol):
         """
         backend, stripped_key = self._get_backend_and_key(file_path)
         res = backend.edit(stripped_key, old_string, new_string, replace_all=replace_all)
+        res.error = _restore_error_path(res.error, stripped_key, file_path)
         if res.path is not None:
             res.path = file_path
         return res
@@ -771,6 +787,7 @@ class CompositeBackend(BackendProtocol):
         """Async version of edit."""
         backend, stripped_key = self._get_backend_and_key(file_path)
         res = await backend.aedit(stripped_key, old_string, new_string, replace_all=replace_all)
+        res.error = _restore_error_path(res.error, stripped_key, file_path)
         if res.path is not None:
             res.path = file_path
         return res
@@ -796,6 +813,7 @@ class CompositeBackend(BackendProtocol):
             res = backend.delete(stripped_key)
         except NotImplementedError:
             return DeleteResult(error=_DELETE_UNSUPPORTED_ERROR.format(file_path=file_path))
+        res.error = _restore_error_path(res.error, stripped_key, file_path)
         if res.path is not None:
             res.path = file_path
         return res
@@ -807,6 +825,7 @@ class CompositeBackend(BackendProtocol):
             res = await backend.adelete(stripped_key)
         except NotImplementedError:
             return DeleteResult(error=_DELETE_UNSUPPORTED_ERROR.format(file_path=file_path))
+        res.error = _restore_error_path(res.error, stripped_key, file_path)
         if res.path is not None:
             res.path = file_path
         return res
